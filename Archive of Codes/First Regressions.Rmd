@@ -1,0 +1,132 @@
+---
+title: "Preliminary Regression"
+output: 
+  html_notebook: 
+    code_folding: hide
+    theme: journal
+    toc: yes
+---
+# Variable Description
+```{r}
+col_labs <- c("Registr Length", "Price Update", "Initial Return", "Insider Sale", "CAR (Publish)","Volat (half1)", "Volat (half2)", "AbnRet (half1)", "AbnRet (half2)")
+varnames <- data.frame(Variable = col_labs)
+varnames$Descrition <- c("Log(Registration Period, days)", "Price Update, %", "Initial Return", "Dummy if there were insider sales at the end of lockup", "CAR during 5 days after letter publication","Stocks volatility in the first half of the first year", "Stocks volatility in the second half of the first year", "Abnornal stock returns (vs Size&BM) in the first half of the first year", "Abnornal stock returns (vs Size&BM) in the second half of the first year")
+print(varnames)
+```
+
+# TABLE 1. OLS Regressions of the Full Sample
+Our OLS results are the same as in the previous version of the paper.
+
+More SEC Comment letters is associated with:
+
+1. Longer Resitration Period
+2. Lower Price Update
+3. Higher Chances of Insider Sales at the end of the Lock Up 
+4. Higher Volatility (during the year, first halfyear, second halfyear)
+
+And there are no relation with:
+
+* All types of returns: Initial returns, returns around letter disclosure, abnormal returns
+
+**ALL results here are very robust to subsampling, controls etc.**
+```{r, include=FALSE}
+require(data.table)
+require(lubridate)
+require(psych)
+require(data.table)
+ipo <- data.table(read.csv("/Users/orhahog/Dropbox/Projects/SEC Letter Project/Data After Review/ipo_20170620.csv"))
+wina <- 0.001
+lwin <- function(x, a = wina) return(winsor(log(1+x),a))
+w <- function(x, a = wina) return(winsor(x,a))
+
+### censor sample here
+ipo1 <- ipo[ymd(Filing_date) > ymd("20050512")  & ymd(Issue_date) < ymd("20161231")] 
+ipo1[, `:=` (author_count = .N), by = letter_author]
+#ipo1 <- ipo1[author_count >= 5]
+
+ipo1[, `:=` (log_sale = lwin(sale), n_segments = w(n_segments), age = lwin(Year - founding_year), UW_rank = w(UW_rank), price_update = w(price_update), F_score = w(F_score),law_rank = w(Law.firm.5years),
+             log_S1_words = lwin(S1_words), S1_un = w(S1_uncertanty), log_words = lwin(Upload1_words), log_n_letters = lwin(n_letters), log_n_letters_after = lwin(n_letters_after_price),
+             registration_length = w(registration_length), log_registration_length = lwin(registration_length), ret_publish = w(ret_publish), vol_half1 = w(vol_half1), vol_half2 = w(vol_half2))]
+
+end_OLS <- " ~  log_sale + n_segments + age +  UW_rank + law_rank + VC + JOBS + log_S1_words + 
+S1_un + log_n_letters|FF_48 + Year + AD_Office|0|FF_48"
+dep_vars <- c("log_registration_length","price_update", "IR", "insider_sales", "ret_publish", "vol_half1","vol_half2", "ret_abn_175", "I(ret_abn_365 - ret_abn_175)")
+#col_labs <- c("Registr Length", "Price Update", "Initial Return", "Insider Sale", "CAR (Publish)","Volat (half1)", "Volat (half2)", "AbnRet (half1)", "AbnRet (half2)")
+var_labs <- c("# Letters, log", "Sales", "# Segments", "Age", "UW Rank", "Law Rank", "VC Dummy",
+               "JOBS Act", "S1 Length", "S1 Uncertanty")
+fe_lines <- list(c("Year FE", rep("YES",length(col_labs))), c("Ind (FF-48) FE", rep("YES",length(col_labs))), c("SEC Office FE", rep("YES",length(col_labs))))
+require(lfe)
+require(stargazer)
+my_felm <- function(x) felm(as.formula(unlist(x)), data = ipo1)
+line <- lapply(dep_vars, function(x) return(paste0(x, end_OLS)))
+model <- lapply(line, my_felm)
+````
+
+```{r results='asis'}
+table1 <- stargazer(model, type = "html",  omit.stat = c("ser", "f"), covariate.labels =  var_labs,
+                    column.labels = col_labs, dep.var.labels.include = F, title = "Table 1. OLS Results", add.lines = fe_lines, order = c(10, 1:9))
+```
+
+
+
+
+```{r, include=FALSE}
+end_2SLS <- " ~  log_sale + n_segments + age +  UW_rank + law_rank + VC + JOBS + 
+log_S1_words + S1_un |FF_48 + Year + AD_Office|(log_n_letters  ~ letter_author)|FF_48"
+line2 <- lapply(dep_vars, function(x) return(paste0(x, end_2SLS)))
+model2 <- lapply(line2, my_felm)
+```
+
+# TABLE 2. 2SLS Regressions of the Full Sample
+Letter-writer fixed effects are used as instrumental variables for the number of SEC Comment letters.
+
+In the causal effect specification there are two very strong results. One additional "random" letters 
+would cause **longer** registration, but would results at **higher** returns around the letter disclosure. (strong results)
+
+And there are two results which come and go in some specifications. One additional "random" letter would cause
+**lower** initial returns and **higher** volatility in the second half of the first year. (weak results, change with specification)
+```{r results='asis'}
+table2 <- stargazer(model2, type = "html",  omit.stat = c("ser", "f"), covariate.labels =  var_labs,
+                    column.labels = col_labs, dep.var.labels.include = F, title = "Table 2. 2SLS Results", add.lines = fe_lines, order = c(10, 1:9))
+
+```
+
+# TABLE 3. OLS Regressions of the Subsample with Returns on the Letter Disclosure Dates Above Median.
+
+Because results on the disclosure date seems to be interesting I run the same test for IPOs with the cummulative abnormal returns after the letter disclosure are above the median value. In these table I have half of IPOs with relativelly "good" SEC letters.
+
+**OLS resutls in this subsample are the same as in the full sample**
+```{r results='asis'}
+ipo2 <- ipo1[ ret_publish >= median(ret_publish)]
+my_felm <- function(x) felm(as.formula(unlist(x)), data = ipo2)
+line3 <- lapply(dep_vars, function(x) return(paste0(x, end_OLS)))
+model3 <- lapply(line3, my_felm)
+
+table3 <- stargazer(model3, type = "html",  omit.stat = c("ser", "f"), covariate.labels =  var_labs,
+                    column.labels = col_labs, dep.var.labels.include = F, title = "Table 3. OLS Results (High Disclosure Returns)", add.lines = fe_lines, order = c(10, 1:9))
+```
+
+```{r, include=FALSE}
+ipo2 <- ipo1[ ret_publish >= median(ret_publish)]
+my_felm <- function(x) felm(as.formula(unlist(x)), data = ipo2)
+line4 <- lapply(dep_vars, function(x) return(paste0(x, end_2SLS)))
+model4 <- lapply(line4, my_felm)
+```
+
+# TABLE 4. 2SLS Regressions of the Subsample with Returns on the Letter Disclosure Dates Above Median.
+
+Here similar to the previous table I restrict the sample to companies that had CAR during five days
+from the disclosure of first letter above the median. Therefore this subsample inlcudes IPOs with relativelly 
+"good" letters. 
+Unlike previous table number of letters is instrumented with the letter-writer fixed effects.
+
+When one additional "good" letter is sent randomly:
+
+1. Registration is longer (like in OLS)
+2. Price Update is lower (like in OLS)
+3. Lower initial returns (!!! not like in OLS)
+4. Higher volatility and initial returns in the second half of the year (!!! not like in OLS)
+```{r results='asis'}
+table4 <- stargazer(model4, type = "html",  omit.stat = c("ser", "f"), covariate.labels =  var_labs,
+                    column.labels = col_labs, dep.var.labels.include = F, title = "Table 4. 2SLS Results (High Disclosure Returns)", add.lines = fe_lines, order = c(10, 1:9))
+```
